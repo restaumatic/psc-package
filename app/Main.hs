@@ -166,8 +166,15 @@ listRemoteTags from = let gitProc = inproc "git"
 getPackageSet :: PackageConfig -> IO ()
 getPackageSet PackageConfig{ source, set } = do
   let pkgDir = ".psc-package" </> fromText set </> ".set"
-  exists <- testdir pkgDir
-  unless exists . void $ cloneShallow source set pkgDir
+  if isLocal source
+    then
+      Turtle.cptree (fromText source) pkgDir
+    else do
+      exists <- testdir pkgDir
+      unless exists . void $ cloneShallow source set pkgDir
+
+  where
+  isLocal path = "." `T.isPrefixOf` path
 
 readPackageSet :: PackageConfig -> IO PackageSet
 readPackageSet PackageConfig{ set } = do
