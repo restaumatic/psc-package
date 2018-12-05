@@ -151,6 +151,22 @@ cloneShallow from ref into =
        , pathToTextUnsafe into
        ] empty .||. exit (ExitFailure 1)
 
+installDependency
+  :: Text
+  -- ^ repo
+  -> Text
+  -- ^ branch/tag
+  -> Turtle.FilePath
+  -- ^ target directory
+  -> IO ()
+installDependency from ref into =
+  if ref == "LATEST"
+    then do
+      from' <- Turtle.realpath $ fromText from
+      Turtle.mktree $ Path.directory into
+      Turtle.symlink from' into
+    else void $ cloneShallow from ref into
+
 listRemoteTags
   :: Text
   -- ^ repo
@@ -166,15 +182,8 @@ listRemoteTags from = let gitProc = inproc "git"
 getPackageSet :: PackageConfig -> IO ()
 getPackageSet PackageConfig{ source, set } = do
   let pkgDir = ".psc-package" </> fromText set </> ".set"
-  if isLocal source
-    then
-      Turtle.cptree (fromText source) pkgDir
-    else do
-      exists <- testdir pkgDir
-      unless exists . void $ cloneShallow source set pkgDir
-
-  where
-  isLocal path = "." `T.isPrefixOf` path
+  exists <- testdir pkgDir
+  unless exists $ installDependency source set pkgDir
 
 readPackageSet :: PackageConfig -> IO PackageSet
 readPackageSet PackageConfig{ set } = do
@@ -206,8 +215,8 @@ performInstall set pkgName PackageInfo{ repo, version } = do
   let pkgDir = packageDir set pkgName version
   exists <- testdir pkgDir
   unless exists . void $ do
-    echoT ("Installing " <> runPackageName pkgName)
-    cloneShallow repo version pkgDir
+    echoT ("Installing " <> runPackageName pkgName <> "@" <> version)
+    installDependency repo version pkgDir
   pure pkgDir
 
 getReverseDeps  :: PackageSet -> PackageName -> IO [(PackageName, PackageInfo)]
