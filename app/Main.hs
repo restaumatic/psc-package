@@ -45,6 +45,8 @@ import           Turtle hiding (arg, fold, s, x)
 import qualified Turtle
 import           Types (PackageName, mkPackageName, runPackageName, untitledPackageName, preludePackageName)
 
+type BaseDir = Turtle.FilePath
+
 echoT :: Text -> IO ()
 echoT = Turtle.printf (Turtle.s % "\n")
 
@@ -152,17 +154,18 @@ cloneShallow from ref into =
        ] empty .||. exit (ExitFailure 1)
 
 installDependency
-  :: Text
+  :: BaseDir
+  -> Text
   -- ^ repo
   -> Text
   -- ^ branch/tag
   -> Turtle.FilePath
   -- ^ target directory
   -> IO ()
-installDependency from ref into =
+installDependency basedir from ref into =
   if ref == "LATEST"
     then do
-      from' <- Turtle.realpath $ fromText from
+      from' <- Turtle.realpath $ basedir </> fromText from
       Turtle.mktree $ Path.directory into
       Turtle.symlink from' into
     else void $ cloneShallow from ref into
@@ -179,11 +182,15 @@ listRemoteTags from = let gitProc = inproc "git"
                                     ] empty
                       in lineToText <$> gitProc
 
+packageSetBaseDir :: PackageConfig -> BaseDir
+packageSetBaseDir PackageConfig{ source, set } =
+  if set == "LATEST" then fromText source else fromText "."
+
 getPackageSet :: PackageConfig -> IO ()
 getPackageSet PackageConfig{ source, set } = do
   let pkgDir = ".psc-package" </> fromText set </> ".set"
   exists <- testdir pkgDir
-  unless exists $ installDependency source set pkgDir
+  unless exists $ installDependency (fromText ".") source set pkgDir
 
 readPackageSet :: PackageConfig -> IO PackageSet
 readPackageSet PackageConfig{ set } = do
@@ -210,13 +217,13 @@ readLocalPackageSet = handleReadPackageSet localPackageSet
 writeLocalPackageSet :: PackageSet -> IO ()
 writeLocalPackageSet = writeTextFile localPackageSet . packageSetToJSON
 
-performInstall :: Text -> PackageName -> PackageInfo -> IO Turtle.FilePath
-performInstall set pkgName PackageInfo{ repo, version } = do
+performInstall :: BaseDir -> Text -> PackageName -> PackageInfo -> IO Turtle.FilePath
+performInstall basedir set pkgName PackageInfo{ repo, version } = do
   let pkgDir = packageDir set pkgName version
   exists <- testdir pkgDir
   unless exists . void $ do
     echoT ("Installing " <> runPackageName pkgName <> "@" <> version)
-    installDependency repo version pkgDir
+    installDependency basedir repo version pkgDir
   pure pkgDir
 
 getReverseDeps  :: PackageSet -> PackageName -> IO [(PackageName, PackageInfo)]
@@ -274,15 +281,19 @@ installImpl :: PackageConfig -> Maybe Int -> IO ()
 installImpl config@PackageConfig{ depends } limitJobs = do
   getPackageSet config
   db <- readPackageSet config
+  let basedir = packageSetBaseDir config
   newPkgs <- getNewPackages db
   when (length newPkgs > 1) $ do
     echoT ("Installing " <> pack (show (length newPkgs)) <> " new packages...")
   case limitJobs of
     Nothing ->
-      forConcurrently_ newPkgs .  uncurry $ performInstall $ set config
+      forConcurrently_ newPkgs $ \(name, info) ->
+        performInstall basedir (set config) name info
     Just max' -> do
       sem <- newQSem max'
-      forConcurrently_ newPkgs .  uncurry . (\x y z -> bracket_ (waitQSem sem) (signalQSem sem) (performInstall x y z)) $ set config
+      forConcurrently_ newPkgs $ \(name, info) ->
+        bracket_ (waitQSem sem) (signalQSem sem) $
+          performInstall basedir (set config) name info
   where
     getNewPackages db =
       getTransitiveDeps db depends >>= filterM isNewPackage
@@ -546,7 +557,7 @@ verify arg limitJobs = do
         dirFor pkgName =
           case Map.lookup pkgName db of
             Nothing -> error ("verifyPackageSet: no directory for " <> show pkgName)
-            Just pkgInfo -> performInstall (set pkg) pkgName pkgInfo
+            Just pkgInfo -> performInstall (packageSetBaseDir pkg) (set pkg) pkgName pkgInfo
       echoT ("Verifying package " <> runPackageName name)
       dependencies <- map fst <$> getTransitiveDeps db [name]
       dirs <- case limitJobs of
