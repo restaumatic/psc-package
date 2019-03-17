@@ -69,6 +69,7 @@ data PackageConfig = PackageConfig
   , depends :: [PackageName]
   , set     :: Text
   , source  :: Text
+  , extraDeps :: Maybe PackageSet
   } deriving (Show, Generic, Aeson.FromJSON, Aeson.ToJSON)
 
 pathToTextUnsafe :: Turtle.FilePath -> Text
@@ -99,6 +100,7 @@ packageConfigToJSON =
                             , "set"
                             , "source"
                             , "depends"
+                            , "extraDeps"
                             ]
                , confIndent = Spaces 2
                , confTrailingNewline = True
@@ -193,9 +195,10 @@ getPackageSet PackageConfig{ source, set } = do
   unless exists $ installDependency (fromText ".") source set pkgDir
 
 readPackageSet :: PackageConfig -> IO PackageSet
-readPackageSet PackageConfig{ set } = do
+readPackageSet PackageConfig{ set, extraDeps } = do
   let dbFile = ".psc-package" </> fromText set </> ".set" </> "packages.json"
-  handleReadPackageSet dbFile
+  pkgset <- handleReadPackageSet dbFile
+  pure $ fromMaybe Map.empty extraDeps `Map.union` pkgset
 
 handleReadPackageSet :: Path.FilePath -> IO PackageSet
 handleReadPackageSet dbFile = do
@@ -329,12 +332,14 @@ initialize setAndSource limitJobs = do
                            , depends = [ preludePackageName ]
                            , source  = "https://github.com/purescript/package-sets.git"
                            , set     = "psc-" <> pack (showVersion pursVersion)
+                           , extraDeps = Nothing
                            }
       Just (set, source) ->
         pure PackageConfig { name    = pkgName
                            , depends = [ preludePackageName ]
                            , source  = fromMaybe "https://github.com/purescript/package-sets.git" source
                            , set
+                           , extraDeps = Nothing
                            }
 
     writePackageFile pkg
