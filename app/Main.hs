@@ -13,7 +13,7 @@ import qualified Control.Foldl as Foldl
 import           Control.Concurrent.Async (forConcurrently_, mapConcurrently)
 import           Control.Concurrent.QSem (newQSem, signalQSem, waitQSem)
 import           Control.Exception (bracket_)
-import           Control.Monad (filterM)
+import           Control.Monad (filterM, forM)
 import qualified Data.Aeson as Aeson
 import           Data.Aeson.Encode.Pretty
 import           Data.Either.Combinators (rightToMaybe)
@@ -24,7 +24,6 @@ import qualified Data.List as List
 import qualified Data.Map as Map
 import           Data.Maybe (fromMaybe, mapMaybe)
 import           Data.Ord (comparing)
-import qualified Data.Set as Set
 import           Data.Text (pack)
 import qualified Data.Text as T
 import           Data.Text.Encoding (encodeUtf8)
@@ -251,19 +250,18 @@ getPursPath = do
     Just p -> return $ pathToTextUnsafe p
 
 getTransitiveDeps :: PackageSet -> [PackageName] -> IO [(PackageName, PackageInfo)]
-getTransitiveDeps db deps =
-    Map.toList . fold <$> traverse (go Set.empty) deps
+getTransitiveDeps db deps = do
+  deps' <- forM deps $ \pkg ->
+    case toVertex pkg of
+      Just x -> pure x
+      Nothing -> exitWithErr $ pkgNotFoundMsg pkg
+  pure $ foldMap (foldMap ((\(info, name, _) -> [(name, info)]) . fromVertex)) $ G.dfs gr deps'
+
   where
-    go seen pkg
-      | pkg `Set.member` seen =
-          exitWithErr ("Cycle in package dependencies at package " <> runPackageName pkg)
-      | otherwise =
-        case Map.lookup pkg db of
-          Nothing ->
-            exitWithErr (pkgNotFoundMsg pkg)
-          Just info@PackageInfo{ dependencies } -> do
-            m <- fold <$> traverse (go (Set.insert pkg seen)) dependencies
-            return (Map.insert pkg info m)
+    (gr, fromVertex, toVertex) =
+      G.graphFromEdges [ (pkg, name, dependencies pkg)
+                       | (name, pkg) <- Map.assocs db
+                       ]
 
     pkgNotFoundMsg pkg =
       "Package `" <> runPackageName pkg <> "` does not exist in package set" <> extraHelp
