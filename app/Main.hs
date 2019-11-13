@@ -43,6 +43,8 @@ import qualified Text.ParserCombinators.ReadP as Read
 import           Turtle hiding (arg, fold, s, x)
 import qualified Turtle
 import           Types (PackageName, mkPackageName, runPackageName, untitledPackageName, preludePackageName)
+import System.Directory
+import qualified System.FilePath as FP
 
 type BaseDir = Turtle.FilePath
 
@@ -166,7 +168,8 @@ installDependency
 installDependency basedir from ref into =
   if ref == "LATEST"
     then do
-      from' <- Turtle.realpath $ basedir </> fromText from
+      from' <- fmap (fromText . T.pack) $ makeAbsolute $
+        T.unpack (pathToTextUnsafe basedir) FP.</> T.unpack from
       Turtle.mktree $ Path.directory into
       Turtle.symlink from' into
     else void $ cloneShallow from ref into
