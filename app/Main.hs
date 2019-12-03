@@ -216,8 +216,8 @@ getPackageSet config@PackageConfig{ source, set } = do
   unless exists $ installDependency (fromText ".") source set pkgDir
 
 readPackageSet :: PackageConfig -> IO PackageSet
-readPackageSet PackageConfig{ set, extraDeps } = do
-  let dbFile = ".psc-package" </> fromText set </> ".set" </> "packages.json"
+readPackageSet config@PackageConfig{ extraDeps } = do
+  let dbFile = packageSetDir (packageSetRef config) </> ".set" </> "packages.json"
   pkgset <- handleReadPackageSet dbFile
   pure $ fromMaybe Map.empty extraDeps `Map.union` pkgset
 
@@ -231,8 +231,8 @@ handleReadPackageSet dbFile = do
     Right db -> return db
 
 writePackageSet :: PackageConfig -> PackageSet -> IO ()
-writePackageSet PackageConfig{ set } =
-  let dbFile = ".psc-package" </> fromText set </> ".set" </> "packages.json"
+writePackageSet config =
+  let dbFile = packageSetDir (packageSetRef config) </> ".set" </> "packages.json"
   in writeTextFile dbFile . packageSetToJSON
 
 readLocalPackageSet :: IO PackageSet
