@@ -43,8 +43,10 @@ import qualified Text.ParserCombinators.ReadP as Read
 import           Turtle hiding (arg, fold, s, x)
 import qualified Turtle
 import           Types (PackageName, mkPackageName, runPackageName, untitledPackageName, preludePackageName)
-import System.Directory
+import qualified Data.Digest.Pure.SHA as H
+import           System.Directory
 import qualified System.FilePath as FP
+import qualified Data.ByteString.Lazy as BL
 
 type BaseDir = Turtle.FilePath
 
@@ -61,9 +63,26 @@ packageFile = "psc-package.json"
 localPackageSet :: Path.FilePath
 localPackageSet = "packages.json"
 
-packageDir :: Text -> PackageName -> Text -> Turtle.FilePath
+data PackageSetRef = PackageSetRef
+  { set_set    :: Text
+  , set_source :: Text
+  } deriving (Show)
+
+packageSetDir :: PackageSetRef -> Turtle.FilePath
+packageSetDir PackageSetRef{ set_source = source, set_set = set } =
+  let ident | set == "LATEST" = "local-" <> hexSha1 source
+            | otherwise       = set
+  in ".psc-package" </> fromText ident
+
+packageSetRef :: PackageConfig -> PackageSetRef
+packageSetRef PackageConfig{source,set} = PackageSetRef{set_set=set, set_source=source}
+
+hexSha1 :: Text -> Text
+hexSha1 = T.pack . H.showDigest . H.sha1 . BL.fromStrict . encodeUtf8
+
+packageDir :: PackageSetRef -> PackageName -> Text -> Turtle.FilePath
 packageDir set pkgName version =
-  ".psc-package" </> fromText set </> fromText (runPackageName pkgName) </> fromText version
+  packageSetDir set </> fromText (runPackageName pkgName) </> fromText version
 
 data PackageConfig = PackageConfig
   { name    :: PackageName
@@ -191,8 +210,8 @@ packageSetBaseDir PackageConfig{ source, set } =
   if set == "LATEST" then fromText source else fromText "."
 
 getPackageSet :: PackageConfig -> IO ()
-getPackageSet PackageConfig{ source, set } = do
-  let pkgDir = ".psc-package" </> fromText set </> ".set"
+getPackageSet config@PackageConfig{ source, set } = do
+  let pkgDir = packageSetDir (packageSetRef config) </> ".set"
   exists <- testdir pkgDir
   unless exists $ installDependency (fromText ".") source set pkgDir
 
@@ -222,7 +241,7 @@ readLocalPackageSet = handleReadPackageSet localPackageSet
 writeLocalPackageSet :: PackageSet -> IO ()
 writeLocalPackageSet = writeTextFile localPackageSet . packageSetToJSON
 
-performInstall :: BaseDir -> Text -> PackageName -> PackageInfo -> IO Turtle.FilePath
+performInstall :: BaseDir -> PackageSetRef -> PackageName -> PackageInfo -> IO Turtle.FilePath
 performInstall basedir set pkgName PackageInfo{ repo, version } = do
   let pkgDir = packageDir set pkgName version
   exists <- testdir pkgDir
@@ -292,18 +311,18 @@ installImpl config@PackageConfig{ depends } limitJobs = do
   case limitJobs of
     Nothing ->
       forConcurrently_ newPkgs $ \(name, info) ->
-        performInstall basedir (set config) name info
+        performInstall basedir (packageSetRef config) name info
     Just max' -> do
       sem <- newQSem max'
       forConcurrently_ newPkgs $ \(name, info) ->
         bracket_ (waitQSem sem) (signalQSem sem) $
-          performInstall basedir (set config) name info
+          performInstall basedir (packageSetRef config) name info
   where
     getNewPackages db =
       getTransitiveDeps db depends >>= filterM isNewPackage
 
     isNewPackage (name, info) =
-      fmap not $ testdir $ packageDir (set config) name (version info)
+      fmap not $ testdir $ packageDir (packageSetRef config) name (version info)
 
 getPureScriptVersion :: IO Version
 getPureScriptVersion = do
@@ -409,9 +428,9 @@ listPackages sorted = do
     fromNode (pkg, name, _) = (name, pkg)
 
 getSourcePaths :: PackageConfig -> PackageSet -> [PackageName] -> IO [Turtle.FilePath]
-getSourcePaths PackageConfig{..} db pkgNames = do
+getSourcePaths config@PackageConfig{..} db pkgNames = do
   trans <- getTransitiveDeps db pkgNames
-  let paths = [ packageDir set pkgName version </> "src" </> "**" </> "*.purs"
+  let paths = [ packageDir (packageSetRef config) pkgName version </> "src" </> "**" </> "*.purs"
               | (pkgName, PackageInfo{ version }) <- trans
               ]
   return paths
@@ -563,7 +582,7 @@ verify arg limitJobs = do
         dirFor pkgName =
           case Map.lookup pkgName db of
             Nothing -> error ("verifyPackageSet: no directory for " <> show pkgName)
-            Just pkgInfo -> performInstall (packageSetBaseDir pkg) (set pkg) pkgName pkgInfo
+            Just pkgInfo -> performInstall (packageSetBaseDir pkg) (packageSetRef pkg) pkgName pkgInfo
       echoT ("Verifying package " <> runPackageName name)
       dependencies <- map fst <$> getTransitiveDeps db [name]
       dirs <- case limitJobs of

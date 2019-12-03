@@ -29,7 +29,8 @@ executable psc-package
                    errors -any,
                    turtle <1.6,
                    directory,
-                   filepath
+                   filepath,
+                   SHA
     main-is: Main.hs
     other-modules: Paths_psc_package
                    Types
